@@ -88,6 +88,7 @@ If you prefer to run tilerender without Docker, follow these steps:
     -DMLN_WITH_CLANG_TIDY=OFF \
     -DMLN_WITH_COVERAGE=OFF \
     -DMLN_DRAWABLE_RENDERER=ON \
+    -DMLN_WITH_PMTILES=ON \
     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
     
     
