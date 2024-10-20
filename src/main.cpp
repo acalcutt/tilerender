@@ -20,7 +20,7 @@
 #include <unistd.h>
 #include <sqlite3.h>
 #include <dirent.h>
-#include <webp/encode.h>
+#include <png.h>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -28,22 +28,42 @@ namespace fs = std::filesystem;
 namespace mbgl
 {
 
-    std::string encodeWebP(const PremultipliedImage &pre)
+    std::string encodePNG(const PremultipliedImage& pre)
     {
         const auto src = util::unpremultiply(pre.clone());
 
-        uint8_t *output_data = nullptr;
-        size_t output_size = WebPEncodeRGBA(src.data.get(), src.size.width, src.size.height, src.stride(), 75.0f, &output_data);
-
-        if (output_size == 0 || output_data == nullptr)
-        {
-            throw std::runtime_error("WebP encoding failed");
+        // PNG encoding using libpng
+        png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+        if (!png_ptr) {
+            throw std::runtime_error("Failed to create PNG write struct");
         }
 
-        std::string webpData(reinterpret_cast<char *>(output_data), output_size);
-        WebPFree(output_data);
+        png_infop info_ptr = png_create_info_struct(png_ptr);
+        if (!info_ptr) {
+            png_destroy_write_struct(&png_ptr, nullptr);
+            throw std::runtime_error("Failed to create PNG info struct");
+        }
 
-        return webpData;
+        std::vector<unsigned char> pngData;
+        std::stringstream ss;
+        png_init_io(png_ptr, &ss);
+
+        png_set_IHDR(png_ptr, info_ptr, src.size.width, src.size.height, 8, PNG_COLOR_TYPE_RGBA,
+                     PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+
+        png_write_info(png_ptr, info_ptr);
+
+        for (size_t y = 0; y < src.size.height; ++y) {
+            png_write_row(png_ptr, reinterpret_cast<png_bytep>(src.data.get() + y * src.stride()));
+        }
+
+        png_write_end(png_ptr, info_ptr);
+        png_destroy_write_struct(&png_ptr, &info_ptr);
+
+        pngData = std::vector<unsigned char>(std::istreambuf_iterator<char>(ss), std::istreambuf_iterator<char>());
+        std::string pngString(pngData.begin(), pngData.end());
+
+        return pngString;
     }
 
 } // namespace mbgl
@@ -129,8 +149,8 @@ void initializeDatabase(const char *dbPath)
                                     "('name', 'raster'), "
                                     "('type', 'baselayer'), "
                                     "('version', '1.0'), "
-                                    "('description', 'rendered vector tiles to webp'), "
-                                    "('format', 'webp');";
+                                    "('description', 'rendered vector tiles to png'), "
+                                    "('format', 'png');";
     rc = sqlite3_exec(db, metadataInsertSQL, nullptr, nullptr, nullptr);
     if (rc != SQLITE_OK)
     {
@@ -209,14 +229,14 @@ void renderTiles(int processId, int numProcesses, int maxZoom, const char *style
                                .withZoom(zoom));
 
                 auto image = frontend.render(map).image;
-                auto webpData = encodeWebP(image);
+                auto imageData = encodePNG(image);
 
                 int tmsY = (1 << zoom) - 1 - y;
 
                 rc = sqlite3_bind_int(stmt, 1, zoom);
                 rc |= sqlite3_bind_int(stmt, 2, x);
                 rc |= sqlite3_bind_int(stmt, 3, tmsY);
-                rc |= sqlite3_bind_blob(stmt, 4, webpData.data(), webpData.size(), SQLITE_TRANSIENT);
+                rc |= sqlite3_bind_blob(stmt, 4, imageData.data(), imageData.size(), SQLITE_TRANSIENT);
 
                 if (rc != SQLITE_OK)
                 {
